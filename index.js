@@ -50,7 +50,32 @@ const logoutBtn = document.getElementById('logout-btn');
 const formTitle = document.getElementById('form-title');
 const recaptchaContainer = document.getElementById('recaptcha-container');
 
-let currentUser = null;
+// Inactivity logout (15 minutes)
+const INACTIVITY_LIMIT = 15 * 60 * 1000;
+let inactivityTimer = null;
+function resetInactivityTimer() {
+    if (inactivityTimer) clearTimeout(inactivityTimer);
+    inactivityTimer = setTimeout(() => {
+        currentUser = null;
+        dashboard.classList.add('hidden');
+        loginForm.classList.remove('hidden');
+        loginForm.reset();
+        loginError.textContent = "You have been logged out due to inactivity.";
+    }, INACTIVITY_LIMIT);
+}
+['mousemove', 'keydown', 'click'].forEach(evt =>
+    document.addEventListener(evt, () => {
+        if (currentUser) resetInactivityTimer();
+    })
+);
+
+// Secure password hashing (SHA-256)
+async function hashPassword(password) {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(password);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+    return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
 
 // Switch forms
 showRegister.onclick = e => {
@@ -70,7 +95,7 @@ showLogin.onclick = e => {
 };
 
 // Register
-registerForm.onsubmit = e => {
+registerForm.onsubmit = async e => {
     e.preventDefault();
     const username = document.getElementById('register-username').value.trim();
     const password = document.getElementById('register-password').value;
@@ -87,16 +112,20 @@ registerForm.onsubmit = e => {
         registerError.textContent = "Registration failed. Please try again.";
         return;
     }
-    users.push({ username, password: hash(password), role });
+    const hashed = await hashPassword(password);
+    users.push({ username, password: hashed, role });
     setUsers(users);
     registerSuccess.textContent = "Registration successful! You can now login.";
     registerForm.reset();
 };
 
 // Login
+const originalLoginHandler = loginForm.onsubmit;
 loginForm.onsubmit = async function(e) {
     e.preventDefault();
     const username = document.getElementById('login-username').value.trim();
+    const password = document.getElementById('login-password').value;
+    const role = document.getElementById('login-role').value;
 
     // Rate limiting
     let attempts = JSON.parse(localStorage.getItem('loginAttempts') || '{}');
@@ -130,16 +159,13 @@ loginForm.onsubmit = async function(e) {
         recaptchaContainer.style.display = 'none';
     }
 
-    // Call your original login logic
-    let prevAttempts = attempts[username] || 0;
-    let beforeUser = currentUser;
-    if (typeof originalLoginHandler === "function") {
-        await originalLoginHandler.apply(this, arguments);
-    }
+    // Secure password check
+    let users = getUsers();
+    const hashed = await hashPassword(password);
+    let user = users.find(u => u.username === username && u.password === hashed && u.role === role);
 
-    // If login failed, increment attempts and block after 5
-    if (!currentUser || currentUser.username !== username) {
-        attempts[username] = prevAttempts + 1;
+    if (!user) {
+        attempts[username] = (attempts[username] || 0) + 1;
         localStorage.setItem('loginAttempts', JSON.stringify(attempts));
         if (attempts[username] >= 5) {
             blockedUsers[username] = Date.now() + 3 * 60 * 1000;
@@ -157,7 +183,7 @@ loginForm.onsubmit = async function(e) {
         return;
     }
 
-    // On success, reset attempts and hide captcha
+    // Reset attempts and captcha on successful login
     if (attempts[username]) {
         delete attempts[username];
         localStorage.setItem('loginAttempts', JSON.stringify(attempts));
@@ -165,6 +191,8 @@ loginForm.onsubmit = async function(e) {
     if (window.grecaptcha) grecaptcha.reset();
     recaptchaContainer.style.display = 'none';
 
+    currentUser = user;
+    showDashboard();
     resetInactivityTimer();
 };
 
@@ -247,22 +275,3 @@ logoutBtn.onclick = () => {
     loginForm.reset();
     loginError.textContent = '';
 };
-
-// Inactivity logout (15 minutes)
-const INACTIVITY_LIMIT = 15 * 60 * 1000;
-let inactivityTimer = null;
-function resetInactivityTimer() {
-    if (inactivityTimer) clearTimeout(inactivityTimer);
-    inactivityTimer = setTimeout(() => {
-        currentUser = null;
-        dashboard.classList.add('hidden');
-        loginForm.classList.remove('hidden');
-        loginForm.reset();
-        loginError.textContent = "You have been logged out due to inactivity.";
-    }, INACTIVITY_LIMIT);
-}
-['mousemove', 'keydown', 'click'].forEach(evt =>
-    document.addEventListener(evt, () => {
-        if (currentUser) resetInactivityTimer();
-    })
-);
